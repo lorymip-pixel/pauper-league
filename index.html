@@ -145,6 +145,7 @@ async function pushRemoteState() {
   let form;
   let onMessage;
   let timeoutId;
+  let saveConfirmed = false;
 
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -267,6 +268,7 @@ async function pushRemoteState() {
     }
 
     remoteRevision = newRevision;
+    saveConfirmed = true;
 
     // Mantiene i dati locali, comprese le modifiche
     // effettuate mentre il salvataggio era in corso.
@@ -318,7 +320,7 @@ async function pushRemoteState() {
     clearTimeout(timeoutId);
     saveInFlight = false;
 
-    if (localDirty && remoteReady && saveAgain) {
+    if (saveConfirmed && localDirty && saveAgain) {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
         if (localDirty && !saveInFlight) {
