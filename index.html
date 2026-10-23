@@ -61,7 +61,189 @@ function load(){let s='';try{s=localStorage.getItem(KEY);db=s?JSON.parse(s):JSON
 function readRemote(){return new Promise((resolve,reject)=>{if(!API_URL.startsWith('https://script.google.com/'))return reject(Error('URL Apps Script non configurato'));const callback='pauperCb_'+Math.random().toString(36).slice(2);const script=document.createElement('script');const timer=setTimeout(()=>{cleanup();reject(Error('Timeout nel collegamento a Google Sheets'))},15000);function cleanup(){clearTimeout(timer);delete window[callback];script.remove()}window[callback]=(data)=>{cleanup();if(!data||!data.ok)return reject(Error(data&&data.error||'Risposta non valida dal server'));resolve(data)};script.onerror=()=>{cleanup();reject(Error('Impossibile leggere Google Sheets: verifica URL e pubblicazione'))};script.src=API_URL+'?action=read&callback='+callback+'&t='+Date.now();document.head.appendChild(script)})}
 async function initializeRemote(){if(!API_URL.startsWith('https://script.google.com/')){setSyncStatus('Modalità locale: incolla l’URL Apps Script in index.html per condividere i dati.','error');renderAll();return}setSyncStatus('Collegamento a Google Sheets…');try{const remote=await readRemote();db=normalizeState(remote.state);remoteRevision=Number(remote.revision)||0;remoteReady=true;localDirty=false;localStorage.setItem(KEY,JSON.stringify(db));renderAll();setSyncStatus('Connessa a Google Sheets · dati condivisi tra tutti','ok');startRemotePolling()}catch(e){remoteReady=false;setSyncStatus('Connessione non riuscita: '+e.message+'. I dati mostrati restano locali.','error')}}
 function startRemotePolling(){if(window.pauperPollingStarted)return;window.pauperPollingStarted=true;setInterval(async()=>{if(!remoteReady||localDirty||saveInFlight)return;try{const latest=await readRemote();if(Number(latest.revision)>remoteRevision){db=normalizeState(latest.state);remoteRevision=Number(latest.revision);localStorage.setItem(KEY,JSON.stringify(db));renderAll();setSyncStatus('Dati aggiornati da un altro giocatore · sincronizzato','ok')}}catch(e){setSyncStatus('Sincronizzazione temporaneamente non disponibile','error')}},15000)}
-function pushRemoteState(){if(!remoteReady)return;if(saveInFlight){saveAgain=true;return}saveInFlight=true;const expected=remoteRevision;const payload=JSON.stringify(db);const frame=document.getElementById('remoteWriteFrame')||(()=>{const f=document.createElement('iframe');f.name='remoteWriteFrame';f.id='remoteWriteFrame';f.style.display='none';document.body.appendChild(f);return f})();const form=document.createElement('form');form.method='POST';form.action=API_URL;form.target=frame.name;form.style.display='none';const add=(name,value)=>{const i=document.createElement('input');i.name=name;i.value=value;form.appendChild(i)};add('action','write');add('revision',String(expected));add('payload',payload);document.body.appendChild(form);let completed=false;const finish=async()=>{if(completed)return;completed=true;form.remove();try{await new Promise(r=>setTimeout(r,700));const latest=await readRemote();const latestState=normalizeState(latest.state);const submittedState=normalizeState(JSON.parse(payload));const comparable=JSON.parse(JSON.stringify(submittedState));latestState.matches.forEach(remoteMatch=>{if(remoteMatch.notes==='Registrata dal segna vita'){const sent=comparable.matches.find(x=>x.id===remoteMatch.id);if(sent){sent.date=remoteMatch.date;sent.createdAt=remoteMatch.createdAt}}});const sameState=JSON.stringify(latestState)===JSON.stringify(comparable);if(Number(latest.revision)===expected+1&&sameState){remoteRevision=Number(latest.revision);db=latestState;localDirty=false;localStorage.setItem(KEY,JSON.stringify(db));renderAll();setSyncStatus('Salvato su Google Sheets · tutti vedono gli stessi dati','ok')}else{remoteRevision=Number(latest.revision)||0;db=latestState;localDirty=false;localStorage.setItem(KEY,JSON.stringify(db));renderAll();setSyncStatus('Conflitto: un altro utente ha salvato prima di te. Dati aggiornati dal server; ripeti l’ultima operazione.','error');alert('Un altro utente ha salvato una modifica nello stesso momento. Ho ricaricato i dati condivisi per evitare di sovrascriverli: controlla il risultato e ripeti l’operazione se necessario.')}}catch(e){setSyncStatus('Verifica del salvataggio non riuscita: '+e.message,'error')}finally{saveInFlight=false;if(saveAgain){saveAgain=false;pushRemoteState()}}};frame.onload=finish;form.submit();setTimeout(finish,2500)}
+async function pushRemoteState() {
+  if (!remoteReady) return;
+  if (saveInFlight) {
+    saveAgain = true;
+    return;
+  }
+
+  saveInFlight = true;
+  saveAgain = false;
+
+  const expected = remoteRevision;
+  const payload = JSON.stringify(db);
+  const submitted = normalizeState(JSON.parse(payload));
+
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  function mergeStates(baseLocal, baseRemote, local, remote) {
+    const merged = JSON.parse(JSON.stringify(remote));
+    let conflicts = 0;
+
+    for (const key of ['players', 'decks', 'matches', 'rounds']) {
+      const base = new Map(baseLocal[key].map(x => [String(x.id), x]));
+      const baseServer = new Map(baseRemote[key].map(x => [String(x.id), x]));
+      const localMap = new Map(local[key].map(x => [String(x.id), x]));
+      const remoteMap = new Map(merged[key].map(x => [String(x.id), x]));
+
+      const ids = new Set([...base.keys(), ...localMap.keys()]);
+
+      for (const id of ids) {
+        const b = base.get(id);
+        const l = localMap.get(id);
+        const r = remoteMap.get(id);
+        const br = baseServer.get(id);
+
+        const localChanged = !same(l, b);
+        if (!localChanged) continue;
+
+        const remoteChanged = !same(r, br);
+
+        if (remoteChanged && !same(l, r)) {
+          conflicts++;
+          continue;
+        }
+
+        if (l === undefined) {
+          remoteMap.delete(id);
+        } else {
+          remoteMap.set(id, l);
+        }
+      }
+
+      merged[key] = [...remoteMap.values()];
+    }
+
+    if (!same(local.league, baseLocal.league)) {
+      if (
+        !same(merged.league, baseRemote.league) &&
+        !same(local.league, merged.league)
+      ) {
+        conflicts++;
+      } else {
+        merged.league = local.league;
+      }
+    }
+
+    return { state: merged, conflicts };
+  }
+
+  let form;
+
+  try {
+    const frame =
+      document.getElementById('remoteWriteFrame') ||
+      (() => {
+        const f = document.createElement('iframe');
+        f.name = 'remoteWriteFrame';
+        f.id = 'remoteWriteFrame';
+        f.style.display = 'none';
+        document.body.appendChild(f);
+        return f;
+      })();
+
+    form = document.createElement('form');
+    form.method = 'POST';
+    form.action = API_URL;
+    form.target = frame.name;
+    form.style.display = 'none';
+
+    const add = (name, value) => {
+      const input = document.createElement('input');
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+    };
+
+    add('action', 'write');
+    add('revision', String(expected));
+    add('payload', payload);
+
+    document.body.appendChild(form);
+    form.submit();
+
+    let latest = null;
+
+    // Attende che il server confermi una nuova revisione.
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await sleep(1000);
+      latest = await readRemote();
+
+      if (Number(latest.revision) > expected) break;
+    }
+
+    if (!latest || Number(latest.revision) <= expected) {
+      throw new Error(
+        'Il server non ha confermato il salvataggio. Le modifiche locali sono conservate.'
+      );
+    }
+
+    let remote = normalizeState(latest.state);
+    const baseRemote = JSON.parse(JSON.stringify(submitted));
+
+    // Il server assegna data e timestamp ai match del segna vita.
+    remote.matches.forEach(m => {
+      if (m.notes !== 'Registrata dal segna vita') return;
+      const base = baseRemote.matches.find(x => x.id === m.id);
+      if (base) {
+        base.date = m.date;
+        base.createdAt = m.createdAt;
+      }
+    });
+
+    // Recupera le eventuali modifiche fatte mentre il salvataggio era in corso.
+    const local = normalizeState(JSON.parse(JSON.stringify(db)));
+    const result = mergeStates(submitted, baseRemote, local, remote);
+
+    db = result.state;
+    remoteRevision = Number(latest.revision);
+    localStorage.setItem(KEY, JSON.stringify(db));
+    renderAll();
+
+    const pendingChanges = !same(db, remote);
+    localDirty = pendingChanges;
+
+    if (result.conflicts > 0) {
+      setSyncStatus(
+        'Conflitto: alcune modifiche coincidevano con modifiche di altri utenti. Verifica i dati.',
+        'error'
+      );
+      alert(
+        'Un altro utente ha modificato gli stessi dati. ' +
+        'Per evitare sovrascritture, ho mantenuto la versione del server ' +
+        'per gli elementi in conflitto. Controlla i risultati.'
+      );
+    } else if (pendingChanges) {
+      setSyncStatus(
+        'Sincronizzazione delle modifiche successive al primo salvataggio…'
+      );
+    } else {
+      setSyncStatus('Salvato su Google Sheets · dati sincronizzati', 'ok');
+    }
+
+  } catch (error) {
+    localDirty = true;
+    setSyncStatus(
+      'Salvataggio da verificare: ' + error.message,
+      'error'
+    );
+  } finally {
+    if (form) form.remove();
+    saveInFlight = false;
+
+    if (localDirty && remoteReady) {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        if (localDirty && !saveInFlight) pushRemoteState();
+      }, saveAgain ? 500 : 1500);
+    }
+
+    saveAgain = false;
+  }
+}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function player(id){return db.players.find(x=>x.id===id)?.name||'Giocatore eliminato'}function deck(id){return db.decks.find(x=>x.id===id)?.name||'Mazzo eliminato'}function allMatches(){return db.matches.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.createdAt||'').localeCompare(a.createdAt||''))}function pct(a,b){return b?Math.round(a/b*100):0}function games(m){return m.gamesA+m.gamesB}function win(m,side){return side==='A'?m.gamesA>m.gamesB:m.gamesB>m.gamesA}function matchWinner(m){return m.gamesA>m.gamesB?m.playerA:m.playerB}
 function stats(){return db.players.map(p=>{let ms=db.matches.filter(m=>m.playerA===p.id||m.playerB===p.id),w=0,l=0,gw=0,gl=0;ms.forEach(m=>{let a=m.playerA===p.id,won=a?m.gamesA>m.gamesB:m.gamesB>m.gamesA;w+=won?1:0;l+=won?0:1;gw+=a?m.gamesA:m.gamesB;gl+=a?m.gamesB:m.gamesA});return {...p,played:ms.length,w,l,gw,gl,pct:pct(w,ms.length),points:w*3}}).sort((a,b)=>b.points-a.points||b.pct-a.pct||b.gw-a.gw||a.name.localeCompare(b.name))}
 function deckStats(){return db.decks.map(d=>{let played=0,w=0,l=0,gw=0,gl=0,matchA=0;db.matches.forEach(m=>{let a=m.deckA===d.id,b=m.deckB===d.id;if(!a&&!b)return;played++;if(a){gw+=m.gamesA;gl+=m.gamesB;w+=m.gamesA>m.gamesB?1:0;l+=m.gamesA>m.gamesB?0:1}else{gw+=m.gamesB;gl+=m.gamesA;w+=m.gamesB>m.gamesA?1:0;l+=m.gamesB>m.gamesA?0:1}});return {...d,played,w,l,gw,gl,matchPct:pct(w,played),gamePct:pct(gw,gw+gl)}}).sort((a,b)=>b.gamePct-a.gamePct||b.played-a.played)}
