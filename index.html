@@ -125,7 +125,43 @@ async function initializeRemote(){
     );
   }
 }
-function startRemotePolling(){if(window.pauperPollingStarted)return;window.pauperPollingStarted=true;setInterval(async()=>{if(!remoteReady||localDirty||saveInFlight)return;try{const latest=await readRemote();if(Number(latest.revision)>remoteRevision){db=normalizeState(latest.state);remoteRevision=Number(latest.revision);localStorage.setItem(KEY,JSON.stringify(db));renderAll();setSyncStatus('Dati aggiornati da un altro giocatore · sincronizzato','ok')}}catch(e){setSyncStatus('Sincronizzazione temporaneamente non disponibile','error')}},15000)}
+
+function startRemotePolling() {
+  if (window.pauperPollingStarted) return;
+  window.pauperPollingStarted = true;
+
+  setInterval(async () => {
+    if (!remoteReady || localDirty || saveInFlight) return;
+
+    try {
+      const latest = await readRemote();
+
+      if (Number(latest.revision) > remoteRevision) {
+        db = normalizeState(latest.state);
+        remoteRevision = Number(latest.revision);
+
+        localStorage.setItem(KEY, JSON.stringify(db));
+        renderAll();
+
+        setSyncStatus(
+          'Dati aggiornati da un altro giocatore · sincronizzato',
+          'ok'
+        );
+      }
+    } catch (e) {
+      console.error(
+        '[Pauper League] Errore polling Google Sheets:',
+        e
+      );
+
+      setSyncStatus(
+        'Sincronizzazione temporaneamente non disponibile: ' +
+          (e && e.message ? e.message : String(e)),
+        'error'
+      );
+    }
+  }, 15000);
+}
 
 async function pushRemoteState() {
   if (!remoteReady) return;
