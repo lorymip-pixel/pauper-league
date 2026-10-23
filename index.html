@@ -69,7 +69,77 @@ function save(){
 }
 function normalizeState(state){if(!state||!Array.isArray(state.players)||!Array.isArray(state.decks)||!Array.isArray(state.matches))throw Error('Archivio remoto non valido');if(!Array.isArray(state.rounds))state.rounds=[];if(!state.league)state.league={name:'Pauper League'};state.version=2;return state}
 function load(){let s='';try{s=localStorage.getItem(KEY);db=s?JSON.parse(s):JSON.parse(JSON.stringify(demo))}catch(e){db=JSON.parse(JSON.stringify(demo))}if(!db.players)db=JSON.parse(JSON.stringify(demo));if(!Array.isArray(db.rounds))db.rounds=[];if(!s)db.rounds=[1,2,3].map(n=>({id:'r'+n,number:n,date:`2026-10-${String(5+n*3).padStart(2,'0')}`,notes:'Presenze fittizie per demo',attendees:db.players.filter((p,i)=>((i+n)%4!==0)).map(p=>p.id),createdAt:new Date().toISOString()}));if(!db.version||db.version<2)db.version=2;}
-function readRemote(){return new Promise((resolve,reject)=>{if(!API_URL.startsWith('https://script.google.com/'))return reject(Error('URL Apps Script non configurato'));const callback='pauperCb_'+Math.random().toString(36).slice(2);const script=document.createElement('script');const timer=setTimeout(()=>{cleanup();reject(Error('Timeout nel collegamento a Google Sheets'))},15000);function cleanup(){clearTimeout(timer);delete window[callback];script.remove()}window[callback]=(data)=>{cleanup();if(!data||!data.ok)return reject(Error(data&&data.error||'Risposta non valida dal server'));resolve(data)};script.onerror=()=>{cleanup();reject(Error('Impossibile leggere Google Sheets: verifica URL e pubblicazione'))};script.src=API_URL+'?action=read&callback='+callback+'&t='+Date.now();document.head.appendChild(script)})}
+function readRemote() {
+  return new Promise((resolve, reject) => {
+    if (!API_URL.startsWith('https://script.google.com/')) {
+      reject(Error('URL Apps Script non configurato'));
+      return;
+    }
+
+    const callback =
+      'pauperCb_' + Math.random().toString(36).slice(2);
+
+    const script = document.createElement('script');
+    let completed = false;
+
+    const timer = setTimeout(() => {
+      if (completed) return;
+      completed = true;
+
+      // Non eliminare subito la callback: la risposta JSONP
+      // potrebbe arrivare in ritardo.
+      script.remove();
+
+      setTimeout(() => {
+        try {
+          delete window[callback];
+        } catch (_) {}
+      }, 60000);
+
+      reject(Error('Timeout nel collegamento a Google Sheets'));
+    }, 20000);
+
+    function cleanup() {
+      clearTimeout(timer);
+      script.remove();
+
+      setTimeout(() => {
+        try {
+          delete window[callback];
+        } catch (_) {}
+      }, 60000);
+    }
+
+    window[callback] = (data) => {
+      if (completed) return;
+      completed = true;
+      cleanup();
+
+      if (!data || !data.ok) {
+        reject(Error(data && data.error || 'Risposta non valida dal server'));
+        return;
+      }
+
+      resolve(data);
+    };
+
+    script.onerror = () => {
+      if (completed) return;
+      completed = true;
+      cleanup();
+      reject(Error('Impossibile leggere Google Sheets: verifica URL e pubblicazione'));
+    };
+
+    script.src =
+      API_URL +
+      '?action=read&callback=' +
+      callback +
+      '&t=' +
+      Date.now();
+
+    document.head.appendChild(script);
+  });
+}
 async function initializeRemote(){
   if (!API_URL.startsWith('https://script.google.com/')) {
     setSyncStatus('Modalità locale: incolla l’URL Apps Script in index.html per condividere i dati.','error');
