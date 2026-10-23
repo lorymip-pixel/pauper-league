@@ -175,6 +175,8 @@ async function pushRemoteState() {
   saveAgain = false;
 
   const expected = remoteRevision;
+  const requestId = 'pauper-' + Date.now() + '-' +
+    Math.random().toString(36).slice(2);
   const payload = JSON.stringify(db);
   const submitted = normalizeState(JSON.parse(payload));
 
@@ -214,22 +216,25 @@ async function pushRemoteState() {
         else resolve(result);
       };
 
+      
       onMessage = event => {
         if (event.source !== frame.contentWindow) return;
-
+      
         const message = event.data;
-
+      
         if (
           !message ||
           message.source !== 'pauper-league-write' ||
+          message.requestId !== requestId ||
           !message.response ||
           typeof message.response.ok !== 'boolean'
         ) {
           return;
         }
-
+      
         finish(null, message.response);
       };
+
 
       window.addEventListener('message', onMessage);
 
@@ -255,9 +260,12 @@ async function pushRemoteState() {
         form.appendChild(input);
       };
 
+      
       add('action', 'write');
       add('revision', String(expected));
       add('payload', payload);
+      add('requestId', requestId);
+
 
       document.body.appendChild(form);
       form.submit();
