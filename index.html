@@ -63,6 +63,7 @@ async function initializeRemote(){if(!API_URL.startsWith('https://script.google.
 function startRemotePolling(){if(window.pauperPollingStarted)return;window.pauperPollingStarted=true;setInterval(async()=>{if(!remoteReady||localDirty||saveInFlight)return;try{const latest=await readRemote();if(Number(latest.revision)>remoteRevision){db=normalizeState(latest.state);remoteRevision=Number(latest.revision);localStorage.setItem(KEY,JSON.stringify(db));renderAll();setSyncStatus('Dati aggiornati da un altro giocatore · sincronizzato','ok')}}catch(e){setSyncStatus('Sincronizzazione temporaneamente non disponibile','error')}},15000)}
 async function pushRemoteState() {
   if (!remoteReady) return;
+
   if (saveInFlight) {
     saveAgain = true;
     return;
@@ -75,63 +76,11 @@ async function pushRemoteState() {
   const payload = JSON.stringify(db);
   const submitted = normalizeState(JSON.parse(payload));
 
-  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-  function mergeStates(baseLocal, baseRemote, local, remote) {
-    const merged = JSON.parse(JSON.stringify(remote));
-    let conflicts = 0;
-
-    for (const key of ['players', 'decks', 'matches', 'rounds']) {
-      const base = new Map(baseLocal[key].map(x => [String(x.id), x]));
-      const baseServer = new Map(baseRemote[key].map(x => [String(x.id), x]));
-      const localMap = new Map(local[key].map(x => [String(x.id), x]));
-      const remoteMap = new Map(merged[key].map(x => [String(x.id), x]));
-
-      const ids = new Set([...base.keys(), ...localMap.keys()]);
-
-      for (const id of ids) {
-        const b = base.get(id);
-        const l = localMap.get(id);
-        const r = remoteMap.get(id);
-        const br = baseServer.get(id);
-
-        const localChanged = !same(l, b);
-        if (!localChanged) continue;
-
-        const remoteChanged = !same(r, br);
-
-        if (remoteChanged && !same(l, r)) {
-          conflicts++;
-          continue;
-        }
-
-        if (l === undefined) {
-          remoteMap.delete(id);
-        } else {
-          remoteMap.set(id, l);
-        }
-      }
-
-      merged[key] = [...remoteMap.values()];
-    }
-
-    if (!same(local.league, baseLocal.league)) {
-      if (
-        !same(merged.league, baseRemote.league) &&
-        !same(local.league, merged.league)
-      ) {
-        conflicts++;
-      } else {
-        merged.league = local.league;
-      }
-    }
-
-    return { state: merged, conflicts };
-  }
-
   let form;
+  let onMessage;
+  let timeoutId;
+
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
   try {
     const frame =
@@ -145,100 +94,165 @@ async function pushRemoteState() {
         return f;
       })();
 
-    form = document.createElement('form');
-    form.method = 'POST';
-    form.action = API_URL;
-    form.target = frame.name;
-    form.style.display = 'none';
+    const response = await new Promise((resolve, reject) => {
+      let completed = false;
 
-    const add = (name, value) => {
-      const input = document.createElement('input');
-      input.name = name;
-      input.value = value;
-      form.appendChild(input);
-    };
+      const cleanup = () => {
+        window.removeEventListener('message', onMessage);
+        clearTimeout(timeoutId);
+      };
 
-    add('action', 'write');
-    add('revision', String(expected));
-    add('payload', payload);
+      const finish = (error, result) => {
+        if (completed) return;
+        completed = true;
+        cleanup();
 
-    document.body.appendChild(form);
-    form.submit();
+        if (error) reject(error);
+        else resolve(result);
+      };
 
-    let latest = null;
+      onMessage = event => {
+        if (event.source !== frame.contentWindow) return;
 
-    // Attende che il server confermi una nuova revisione.
-    for (let attempt = 0; attempt < 12; attempt++) {
-      await sleep(1000);
-      latest = await readRemote();
+        const message = event.data;
 
-      if (Number(latest.revision) > expected) break;
-    }
+        if (
+          !message ||
+          message.source !== 'pauper-league-write' ||
+          !message.response ||
+          typeof message.response.ok !== 'boolean'
+        ) {
+          return;
+        }
 
-    if (!latest || Number(latest.revision) <= expected) {
-      throw new Error(
-        'Il server non ha confermato il salvataggio. Le modifiche locali sono conservate.'
-      );
-    }
+        finish(null, message.response);
+      };
 
-    let remote = normalizeState(latest.state);
-    const baseRemote = JSON.parse(JSON.stringify(submitted));
+      window.addEventListener('message', onMessage);
 
-    // Il server assegna data e timestamp ai match del segna vita.
-    remote.matches.forEach(m => {
-      if (m.notes !== 'Registrata dal segna vita') return;
-      const base = baseRemote.matches.find(x => x.id === m.id);
-      if (base) {
-        base.date = m.date;
-        base.createdAt = m.createdAt;
-      }
+      timeoutId = setTimeout(() => {
+        finish(
+          new Error(
+            'Nessuna conferma ricevuta dal server. I dati locali sono conservati: verifica il salvataggio prima di riprovare.'
+          )
+        );
+      }, 20000);
+
+      form = document.createElement('form');
+      form.method = 'POST';
+      form.action = API_URL;
+      form.target = frame.name;
+      form.style.display = 'none';
+
+      const add = (name, value) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      };
+
+      add('action', 'write');
+      add('revision', String(expected));
+      add('payload', payload);
+
+      document.body.appendChild(form);
+      form.submit();
     });
 
-    // Recupera le eventuali modifiche fatte mentre il salvataggio era in corso.
-    const local = normalizeState(JSON.parse(JSON.stringify(db)));
-    const result = mergeStates(submitted, baseRemote, local, remote);
+    if (!response.ok) {
+      localDirty = true;
 
-    db = result.state;
-    remoteRevision = Number(latest.revision);
-    localStorage.setItem(KEY, JSON.stringify(db));
-    renderAll();
+      if (response.conflict) {
+        setSyncStatus(
+          'Conflitto con il server: modifiche locali conservate. Non riprovare automaticamente.',
+          'error'
+        );
 
-    const pendingChanges = !same(db, remote);
-    localDirty = pendingChanges;
+        alert(
+          'Google Sheets segnala un conflitto con un altro salvataggio. ' +
+          'Le modifiche locali sono state conservate. ' +
+          'Non aggiornare la pagina e non riprovare ancora: occorre verificare i dati.'
+        );
+      } else {
+        setSyncStatus(
+          'Salvataggio non riuscito: ' +
+            (response.error || 'errore del server') +
+            '. Modifiche locali conservate.',
+          'error'
+        );
+      }
 
-    if (result.conflicts > 0) {
+      return;
+    }
+
+    const newRevision = Number(response.revision);
+
+    if (!Number.isFinite(newRevision) || newRevision <= expected) {
+      localDirty = true;
       setSyncStatus(
-        'Conflitto: alcune modifiche coincidevano con modifiche di altri utenti. Verifica i dati.',
+        'Conferma del server non valida. Modifiche locali conservate.',
         'error'
       );
-      alert(
-        'Un altro utente ha modificato gli stessi dati. ' +
-        'Per evitare sovrascritture, ho mantenuto la versione del server ' +
-        'per gli elementi in conflitto. Controlla i risultati.'
-      );
-    } else if (pendingChanges) {
+      return;
+    }
+
+    remoteRevision = newRevision;
+
+    // Mantiene intatti i dati locali, comprese le modifiche
+    // effettuate mentre la richiesta era in corso.
+    const current = normalizeState(
+      JSON.parse(JSON.stringify(db))
+    );
+
+    localStorage.setItem(KEY, JSON.stringify(db));
+
+    const pendingChanges = !same(current, submitted);
+    localDirty = pendingChanges;
+
+    if (pendingChanges) {
       setSyncStatus(
-        'Sincronizzazione delle modifiche successive al primo salvataggio…'
+        'Salvataggio confermato. Sincronizzazione delle modifiche successive…'
       );
     } else {
-      setSyncStatus('Salvato su Google Sheets · dati sincronizzati', 'ok');
+      setSyncStatus(
+        'Salvato su Google Sheets · dati sincronizzati',
+        'ok'
+      );
     }
 
   } catch (error) {
+    // Non riprova automaticamente: la richiesta potrebbe essere
+    // arrivata al server anche se la conferma non è stata ricevuta.
     localDirty = true;
+
     setSyncStatus(
-      'Salvataggio da verificare: ' + error.message,
+      'Salvataggio da verificare: ' +
+        error.message +
+        ' Le modifiche locali sono conservate.',
       'error'
     );
+
   } finally {
     if (form) form.remove();
+
+    if (onMessage) {
+      window.removeEventListener('message', onMessage);
+    }
+
+    clearTimeout(timeoutId);
     saveInFlight = false;
 
-    if (localDirty && remoteReady) {
+    if (localDirty && remoteReady && !saveAgain) {
+      // Nessun nuovo tentativo automatico dopo un errore:
+      // evita di inviare dati potenzialmente in conflitto.
+    } else if (localDirty && remoteReady && saveAgain) {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
-        if (localDirty && !saveInFlight) pushRemoteState();
-      }, saveAgain ? 500 : 1500);
+        if (localDirty && !saveInFlight) {
+          pushRemoteState();
+        }
+      }, 500);
     }
 
     saveAgain = false;
