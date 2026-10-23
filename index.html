@@ -49,18 +49,84 @@ body.arena-open{overflow:hidden}
 <div id="lifeConfirm" class="life-confirm" role="dialog" aria-modal="true" aria-labelledby="lifeConfirmTitle"><div class="life-confirm-card"><h2 id="lifeConfirmTitle">Game concluso?</h2><p id="lifeConfirmText">Un giocatore ha raggiunto zero vite.</p><div class="actions"><button class="secondary" onclick="undoLastLifeMove()">Annulla ultima mossa</button><button onclick="confirmLifeGame()">Conferma fine game</button></div></div></div><div id="addPlayerModal" class="life-confirm" role="dialog" aria-modal="true" aria-labelledby="addPlayerTitle"><div class="life-confirm-card"><h2 id="addPlayerTitle">Nuovo giocatore</h2><p class="muted" style="margin-bottom:12px">Inserisci il nome o nickname da aggiungere alla lista.</p><label for="addPlayerName">Nome / nickname</label><input id="addPlayerName" type="text" maxlength="60" autocomplete="off" placeholder="Es. Alex" onkeydown="if(event.key==='Enter'){event.preventDefault();savePlayerFromLifeModal()}"/><div class="actions"><button class="secondary" onclick="cancelPlayerFromLifeModal()">Annulla</button><button onclick="savePlayerFromLifeModal()">Aggiungi giocatore</button></div></div></div><div id="addDeckModal" class="life-confirm" role="dialog" aria-modal="true" aria-labelledby="addDeckTitle"><div class="life-confirm-card"><h2 id="addDeckTitle">Nuovo archetipo</h2><p class="muted" style="margin-bottom:12px">Inserisci il nome dell'archetipo da aggiungere alla lista.</p><label for="addDeckName">Nome archetipo</label><input id="addDeckName" type="text" maxlength="60" autocomplete="off" placeholder="Es. Mono Blue Terror" onkeydown="if(event.key==='Enter'){event.preventDefault();saveDeckFromLifeModal()}"/><div class="actions"><button class="secondary" onclick="cancelDeckFromLifeModal()">Annulla</button><button onclick="saveDeckFromLifeModal()">Aggiungi archetipo</button></div></div></div><div class="toast" id="toast"></div></div>
 <script>
 const KEY='pauperLeague.v1';
+const PENDING_KEY=KEY+'.pending';
 // Dopo aver pubblicato Google Apps Script, incolla qui l'URL della Web App che termina in /exec.
 const API_URL='https://script.google.com/macros/s/AKfycbwlKzXyjAoryznce-VHU3dLA_8a5nEe68GPHKipute7nIvSPnP3aDI3LqF7Vnblputf/exec';
 let db; let remoteRevision=0; let remoteReady=false; let localDirty=false; let saveTimer=null; let saveInFlight=false; let saveAgain=false;
 const demo={version:1,league:{name:'Pauper League'},players:[['p1','GoblinKing'],['p2','MarduMitch'],['p3','TronDad'],['p4','FaerieFan'],['p5','BoglesBoi'],['p6','Pestilence'],['p7','BurnBaby'],['p8','TortEx'],['p9','DimirDelver'],['p10','WhiteWeenie']].map(([id,name])=>({id,name,createdAt:new Date().toISOString()})),decks:[['d1','Mono Red'],['d2','Altar Tron'],['d3','Dimir Faeries'],['d4','Golgari Food'],['d5','Bogles'],['d6','White Weenie']].map(([id,name])=>({id,name,createdAt:new Date().toISOString()})),matches:[['p1','d1','p2','d2',2,1,1],['p3','d2','p4','d3',2,0,1],['p5','d5','p6','d4',0,2,1],['p7','d1','p8','d4',2,0,1],['p9','d3','p10','d6',2,1,1],['p2','d2','p3','d2',1,2,2],['p4','d3','p5','d5',2,0,2],['p6','d4','p7','d1',2,1,2],['p8','d4','p9','d3',0,2,2],['p10','d6','p1','d1',0,2,2],['p1','d1','p3','d2',1,2,3],['p2','d2','p4','d3',0,2,3],['p5','d5','p7','d1',1,2,3],['p6','d4','p9','d3',2,0,3]].map((x,i)=>({id:'m'+(i+1),playerA:x[0],deckA:x[1],playerB:x[2],deckB:x[3],gamesA:x[4],gamesB:x[5],round:x[6],date:`2026-10-${String(2+Math.min(x[6]*3,18)).padStart(2,'0')}`,notes:'',createdAt:new Date().toISOString()}))};
 function uid(prefix){return prefix+'_'+Math.random().toString(36).slice(2,10)}
 function setSyncStatus(message,kind='info'){const el=document.getElementById('syncBanner');if(!el)return;el.textContent=message;el.style.borderColor=kind==='ok'?'#507d37':kind==='error'?'#a94b57':'var(--line)'}
-function save(){localStorage.setItem(KEY,JSON.stringify(db));renderAll();if(remoteReady&&API_URL.startsWith('https://script.google.com/')){localDirty=true;clearTimeout(saveTimer);saveTimer=setTimeout(pushRemoteState,350)}}
+function save(){
+  localStorage.setItem(KEY, JSON.stringify(db));
+  localStorage.setItem(PENDING_KEY, JSON.stringify(db));
+  renderAll();
+
+  if (remoteReady && API_URL.startsWith('https://script.google.com/')) {
+    localDirty = true;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(pushRemoteState, 350);
+  }
+}
 function normalizeState(state){if(!state||!Array.isArray(state.players)||!Array.isArray(state.decks)||!Array.isArray(state.matches))throw Error('Archivio remoto non valido');if(!Array.isArray(state.rounds))state.rounds=[];if(!state.league)state.league={name:'Pauper League'};state.version=2;return state}
 function load(){let s='';try{s=localStorage.getItem(KEY);db=s?JSON.parse(s):JSON.parse(JSON.stringify(demo))}catch(e){db=JSON.parse(JSON.stringify(demo))}if(!db.players)db=JSON.parse(JSON.stringify(demo));if(!Array.isArray(db.rounds))db.rounds=[];if(!s)db.rounds=[1,2,3].map(n=>({id:'r'+n,number:n,date:`2026-10-${String(5+n*3).padStart(2,'0')}`,notes:'Presenze fittizie per demo',attendees:db.players.filter((p,i)=>((i+n)%4!==0)).map(p=>p.id),createdAt:new Date().toISOString()}));if(!db.version||db.version<2)db.version=2;}
 function readRemote(){return new Promise((resolve,reject)=>{if(!API_URL.startsWith('https://script.google.com/'))return reject(Error('URL Apps Script non configurato'));const callback='pauperCb_'+Math.random().toString(36).slice(2);const script=document.createElement('script');const timer=setTimeout(()=>{cleanup();reject(Error('Timeout nel collegamento a Google Sheets'))},15000);function cleanup(){clearTimeout(timer);delete window[callback];script.remove()}window[callback]=(data)=>{cleanup();if(!data||!data.ok)return reject(Error(data&&data.error||'Risposta non valida dal server'));resolve(data)};script.onerror=()=>{cleanup();reject(Error('Impossibile leggere Google Sheets: verifica URL e pubblicazione'))};script.src=API_URL+'?action=read&callback='+callback+'&t='+Date.now();document.head.appendChild(script)})}
-async function initializeRemote(){if(!API_URL.startsWith('https://script.google.com/')){setSyncStatus('Modalità locale: incolla l’URL Apps Script in index.html per condividere i dati.','error');renderAll();return}setSyncStatus('Collegamento a Google Sheets…');try{const remote=await readRemote();db=normalizeState(remote.state);remoteRevision=Number(remote.revision)||0;remoteReady=true;localDirty=false;localStorage.setItem(KEY,JSON.stringify(db));renderAll();setSyncStatus('Connessa a Google Sheets · dati condivisi tra tutti','ok');startRemotePolling()}catch(e){remoteReady=false;setSyncStatus('Connessione non riuscita: '+e.message+'. I dati mostrati restano locali.','error')}}
+async function initializeRemote(){
+  if (!API_URL.startsWith('https://script.google.com/')) {
+    setSyncStatus('Modalità locale: incolla l’URL Apps Script in index.html per condividere i dati.','error');
+    renderAll();
+    return;
+  }
+
+  setSyncStatus('Collegamento a Google Sheets…');
+
+  try {
+    const remote = await readRemote();
+    remoteRevision = Number(remote.revision) || 0;
+    remoteReady = true;
+
+    const pending = localStorage.getItem(PENDING_KEY);
+
+    if (pending) {
+      try {
+        db = normalizeState(JSON.parse(pending));
+      } catch (e) {
+        setSyncStatus(
+          'Backup locale in sospeso non leggibile. Non modificare i dati: occorre recuperarli dal backup.',
+          'error'
+        );
+        remoteReady = false;
+        return;
+      }
+
+      localDirty = true;
+      localStorage.setItem(KEY, JSON.stringify(db));
+      renderAll();
+
+      setSyncStatus(
+        'Modifiche locali non ancora confermate: dati conservati. Verifica prima di sincronizzare.',
+        'error'
+      );
+      return;
+    }
+
+    db = normalizeState(remote.state);
+    localDirty = false;
+    localStorage.setItem(KEY, JSON.stringify(db));
+    renderAll();
+
+    setSyncStatus('Connessa a Google Sheets · dati condivisi tra tutti','ok');
+    startRemotePolling();
+
+  } catch (e) {
+    remoteReady = false;
+    setSyncStatus(
+      'Connessione non riuscita: ' + e.message + '. I dati mostrati restano locali.',
+      'error'
+    );
+  }
+}
 function startRemotePolling(){if(window.pauperPollingStarted)return;window.pauperPollingStarted=true;setInterval(async()=>{if(!remoteReady||localDirty||saveInFlight)return;try{const latest=await readRemote();if(Number(latest.revision)>remoteRevision){db=normalizeState(latest.state);remoteRevision=Number(latest.revision);localStorage.setItem(KEY,JSON.stringify(db));renderAll();setSyncStatus('Dati aggiornati da un altro giocatore · sincronizzato','ok')}}catch(e){setSyncStatus('Sincronizzazione temporaneamente non disponibile','error')}},15000)}
+
 async function pushRemoteState() {
   if (!remoteReady) return;
 
@@ -162,6 +228,7 @@ async function pushRemoteState() {
 
     if (!response.ok) {
       localDirty = true;
+      localStorage.setItem(PENDING_KEY, JSON.stringify(db));
 
       if (response.conflict) {
         setSyncStatus(
@@ -190,6 +257,8 @@ async function pushRemoteState() {
 
     if (!Number.isFinite(newRevision) || newRevision <= expected) {
       localDirty = true;
+      localStorage.setItem(PENDING_KEY, JSON.stringify(db));
+
       setSyncStatus(
         'Conferma del server non valida. Modifiche locali conservate.',
         'error'
@@ -199,8 +268,8 @@ async function pushRemoteState() {
 
     remoteRevision = newRevision;
 
-    // Mantiene intatti i dati locali, comprese le modifiche
-    // effettuate mentre la richiesta era in corso.
+    // Mantiene i dati locali, comprese le modifiche
+    // effettuate mentre il salvataggio era in corso.
     const current = normalizeState(
       JSON.parse(JSON.stringify(db))
     );
@@ -211,10 +280,14 @@ async function pushRemoteState() {
     localDirty = pendingChanges;
 
     if (pendingChanges) {
+      localStorage.setItem(PENDING_KEY, JSON.stringify(db));
+
       setSyncStatus(
         'Salvataggio confermato. Sincronizzazione delle modifiche successive…'
       );
     } else {
+      localStorage.removeItem(PENDING_KEY);
+
       setSyncStatus(
         'Salvato su Google Sheets · dati sincronizzati',
         'ok'
@@ -222,9 +295,11 @@ async function pushRemoteState() {
     }
 
   } catch (error) {
-    // Non riprova automaticamente: la richiesta potrebbe essere
-    // arrivata al server anche se la conferma non è stata ricevuta.
+    // La richiesta potrebbe essere arrivata al server anche
+    // se la conferma non è stata ricevuta: non ritentare in automatico.
     localDirty = true;
+    localStorage.setItem(PENDING_KEY, JSON.stringify(db));
+    localStorage.setItem(KEY, JSON.stringify(db));
 
     setSyncStatus(
       'Salvataggio da verificare: ' +
@@ -243,10 +318,7 @@ async function pushRemoteState() {
     clearTimeout(timeoutId);
     saveInFlight = false;
 
-    if (localDirty && remoteReady && !saveAgain) {
-      // Nessun nuovo tentativo automatico dopo un errore:
-      // evita di inviare dati potenzialmente in conflitto.
-    } else if (localDirty && remoteReady && saveAgain) {
+    if (localDirty && remoteReady && saveAgain) {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
         if (localDirty && !saveInFlight) {
