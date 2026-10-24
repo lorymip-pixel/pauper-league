@@ -182,7 +182,6 @@ function startRemotePolling() {
     }
   }, 15000);
 }
-
 async function pushRemoteState() {
   if (!remoteReady) return;
 
@@ -201,11 +200,60 @@ async function pushRemoteState() {
   const submitted = normalizeState(JSON.parse(payload));
 
   let form;
-  let onMessage;
   let timeoutId;
   let saveConfirmed = false;
 
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  const checkStatus = async () => {
+    const url = API_URL +
+      '?action=status&requestId=' +
+      encodeURIComponent(requestId) +
+      '&t=' + Date.now();
+
+    const response = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      throw new Error('Errore HTTP ' + response.status);
+    }
+
+    const data = await response.json();
+
+    if (!data || data.ok !== true) {
+      throw new Error(
+        data?.error || 'Risposta di verifica non valida.'
+      );
+    }
+
+    return data;
+  };
+
+  const waitForStatus = async () => {
+    const deadline = Date.now() + 25000;
+
+    while (Date.now() < deadline) {
+      const status = await checkStatus();
+
+      if (!status.pending) {
+        if (!status.response) {
+          throw new Error('Esito della scrittura mancante.');
+        }
+        return status.response;
+      }
+
+      await new Promise(resolve => {
+        setTimeout(resolve, 1000);
+      });
+    }
+
+    throw new Error(
+      'Tempo scaduto durante la verifica. ' +
+      'I dati locali sono conservati: verifica il salvataggio prima di riprovare.'
+    );
+  };
 
   try {
     const frame =
@@ -219,92 +267,54 @@ async function pushRemoteState() {
         return f;
       })();
 
-    const response = await new Promise((resolve, reject) => {
-      let completed = false;
+    // Prepara il modulo POST.
+    form = document.createElement('form');
+    form.method = 'POST';
+    form.action = API_URL;
+    form.target = frame.name;
+    form.style.display = 'none';
 
-      const cleanup = () => {
-        window.removeEventListener('message', onMessage);
-        clearTimeout(timeoutId);
-      };
+    const add = (name, value) => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+    };
 
-      const finish = (error, result) => {
-        if (completed) return;
-        completed = true;
-        cleanup();
+    add('action', 'write');
+    add('revision', String(expected));
+    add('payload', payload);
+    add('requestId', requestId);
 
-        if (error) reject(error);
-        else resolve(result);
-      };
+    document.body.appendChild(form);
 
-      
-      onMessage = event => {
-        if (event.source !== frame.contentWindow) return;
-      
-        const message = event.data;
-      
-        if (
-          !message ||
-          message.source !== 'pauper-league-write' ||
-          message.requestId !== requestId ||
-          !message.response ||
-          typeof message.response.ok !== 'boolean'
-        ) {
-          return;
-        }
-      
-        finish(null, message.response);
-      };
+    // Invia la scrittura. La conferma sarà verificata tramite GET.
+    form.submit();
 
-
-      window.addEventListener('message', onMessage);
-
-      timeoutId = setTimeout(() => {
-        finish(
-          new Error(
-            'Nessuna conferma ricevuta dal server. I dati locali sono conservati: verifica il salvataggio prima di riprovare.'
-          )
-        );
-      }, 20000);
-
-      form = document.createElement('form');
-      form.method = 'POST';
-      form.action = API_URL;
-      form.target = frame.name;
-      form.style.display = 'none';
-
-      const add = (name, value) => {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = name;
-        input.value = value;
-        form.appendChild(input);
-      };
-
-      
-      add('action', 'write');
-      add('revision', String(expected));
-      add('payload', payload);
-      add('requestId', requestId);
-
-
-      document.body.appendChild(form);
-      form.submit();
-    });
+    const response = await waitForStatus();
 
     if (!response.ok) {
       localDirty = true;
       localStorage.setItem(PENDING_KEY, JSON.stringify(db));
 
       if (response.conflict) {
+        // La revisione remota è nota, ma non si sovrascrive
+        // automaticamente un archivio aggiornato altrove.
+        if (Number.isFinite(Number(response.revision))) {
+          remoteRevision = Number(response.revision);
+        }
+
         setSyncStatus(
-          'Conflitto con il server: modifiche locali conservate. Non riprovare automaticamente.',
+          'Conflitto con il server: modifiche locali conservate. ' +
+          'Verifica i dati prima di riprovare.',
           'error'
         );
 
         alert(
           'Google Sheets segnala un conflitto con un altro salvataggio. ' +
           'Le modifiche locali sono state conservate. ' +
-          'Non aggiornare la pagina e non riprovare ancora: occorre verificare i dati.'
+          'Non riprovare ancora: occorre verificare i dati.'
         );
       } else {
         setSyncStatus(
@@ -334,8 +344,6 @@ async function pushRemoteState() {
     remoteRevision = newRevision;
     saveConfirmed = true;
 
-    // Mantiene i dati locali, comprese le modifiche
-    // effettuate mentre il salvataggio era in corso.
     const current = normalizeState(
       JSON.parse(JSON.stringify(db))
     );
@@ -361,8 +369,8 @@ async function pushRemoteState() {
     }
 
   } catch (error) {
-    // La richiesta potrebbe essere arrivata al server anche
-    // se la conferma non è stata ricevuta: non ritentare in automatico.
+    // Non ritentare automaticamente: il server potrebbe avere
+    // elaborato la richiesta anche se la verifica non è riuscita.
     localDirty = true;
     localStorage.setItem(PENDING_KEY, JSON.stringify(db));
     localStorage.setItem(KEY, JSON.stringify(db));
@@ -376,10 +384,6 @@ async function pushRemoteState() {
 
   } finally {
     if (form) form.remove();
-
-    if (onMessage) {
-      window.removeEventListener('message', onMessage);
-    }
 
     clearTimeout(timeoutId);
     saveInFlight = false;
