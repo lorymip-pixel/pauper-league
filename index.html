@@ -115,36 +115,46 @@ function finishLifeMatch(){if(!lifeMatch)return;let m=lifeMatch;const playerA=m.
 function addFinalDeckInline(){const input=document.getElementById('lcNewDeckName');if(!input)return;const clean=input.value.trim();if(!clean)return toast('Inserisci il nome dell’archetipo');const existing=db.decks.find(d=>d.name.trim().toLowerCase()===clean.toLowerCase());let d=existing;if(!d){d={id:uid('d'),name:clean,createdAt:new Date().toISOString()};db.decks.push(d);save()}['lcFinalDeckA','lcFinalDeckB'].forEach(id=>{const sel=document.getElementById(id);if(sel&&!Array.from(sel.options).some(o=>o.value===d.id)){const opt=document.createElement('option');opt.value=d.id;opt.textContent=d.name;sel.appendChild(opt)}});const note=document.getElementById('lcNewDeckNote');if(note)note.textContent=existing?'Archetipo già presente: selezionato per il giocatore scelto.':'Archetipo aggiunto alla lista. Selezionalo nel menu del giocatore che lo ha usato.';input.value='';toast(existing?'Archetipo già presente':'Archetipo aggiunto')}
 function saveLifeMatch(){
   if(!lifeMatch) return;
-
   if(lifeMatch.gamesA === lifeMatch.gamesB){
     alert('Il risultato non può essere in parità.');
     return;
   }
-
-  const da = lifeMatch.deckA || '';
-  const dbb = lifeMatch.deckB || '';
-
-  let m = {
+  const playerA = lifeMatch.playerA;
+  const playerB = lifeMatch.playerB;
+  const deckA = document.getElementById('lcFinalDeckA')?.value || '';
+  const deckB = document.getElementById('lcFinalDeckB')?.value || '';
+  if(!playerA || !playerB || playerA === playerB){
+    alert('I giocatori della partita non sono validi.');
+    return;
+  }
+  if(!deckA || !deckB || !db.decks.some(d => d.id === deckA) || !db.decks.some(d => d.id === deckB)){
+    alert('Seleziona l’archetipo utilizzato da entrambi i giocatori.');
+    return;
+  }
+  const m = {
     id: uid('m'),
-    round: lifeMatch.round,
+    round: Number(lifeMatch.round) || 1,
     date: lifeMatch.date || new Date().toISOString().slice(0, 10),
-    playerA: lifeMatch.playerA,
-    deckA: da,
-    playerB: lifeMatch.playerB,
-    deckB: dbb,
-    gamesA: lifeMatch.gamesA,
-    gamesB: lifeMatch.gamesB,
+    playerA,
+    deckA,
+    playerB,
+    deckB,
+    gamesA: Number(lifeMatch.gamesA),
+    gamesB: Number(lifeMatch.gamesB),
     notes: 'Registrata dal segna vita',
     createdAt: new Date().toISOString()
   };
-
   db.matches.push(m);
-
   lifeMatch = null;
   save();
   renderAll();
-
-  alert('Partita registrata correttamente.');
+  document.querySelectorAll('[data-lc-final="1"]').forEach(x => x.remove());
+  const statusCard = document.querySelector('.life-setup-status');
+  if(statusCard) statusCard.style.display = '';
+  const lifePlayers = document.getElementById('lifePlayers');
+  if(lifePlayers) lifePlayers.style.display = '';
+  renderLifeDisplay();
+  alert('Partita registrata correttamente con gli archetipi selezionati.');
 }
 function cancelLifeMatch(){if(!lifeMatch)return; if(!confirm('Annullare il match senza salvarlo?'))return;pendingLifeWinner=null;lastLifeMove=null;document.getElementById('lifeConfirm').classList.remove('active');lifeMatch=null;document.getElementById('lifePlayers').style.display='';const statusCard=document.querySelector('.life-setup-status');if(statusCard)statusCard.style.display='';document.querySelectorAll('[data-lc-final="1"]').forEach(x=>x.remove());renderLifeDisplay();toast('Match annullato')}
 document.getElementById('lcPlayerA').addEventListener('change',()=>handleLifePlayerChange('A'));document.getElementById('lcPlayerB').addEventListener('change',()=>handleLifePlayerChange('B'));
