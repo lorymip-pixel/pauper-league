@@ -155,10 +155,26 @@ table{font-size:12px}th,td{padding:9px 7px}
 .life-info summary:hover,.life-info[open] summary{border-color:var(--accent);color:var(--accent)}
 .life-info-content{position:absolute;top:calc(100% + 9px);left:0;z-index:20;width:min(330px,calc(100vw - 76px));box-sizing:border-box;padding:12px 14px;background:#202b45;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 30px #0008;color:var(--text);font-size:13px;font-weight:400;line-height:1.5}
 @media(hover:hover){.life-info:not([open]):hover .life-info-content{display:block}.life-info:not([open]) .life-info-content{display:none}}
-/* Su smartphone il pannello informativo resta ancorato alla scheda, non all’icona. */
-@media(max-width:700px){
-  .life-info{position:static}
-  .life-info-content{left:0;right:0;top:calc(100% + 8px);width:100%;max-width:100%;overflow-wrap:anywhere}
+/* Safari iOS: tooltip in viewport, mai ancorato all'icona a destra. */
+@media(max-width:900px), (hover:none) and (pointer:coarse){
+  #lcInfoTooltip .life-info-content{
+    position:fixed !important;
+    top:50% !important;
+    left:16px !important;
+    right:16px !important;
+    bottom:auto !important;
+    transform:translateY(-50%);
+    width:auto !important;
+    max-width:none !important;
+    max-height:calc(100dvh - 48px);
+    overflow-y:auto;
+    overflow-wrap:anywhere;
+    z-index:2001;
+    box-sizing:border-box;
+    font-size:15px;
+    padding:20px;
+    box-shadow:0 18px 70px #000c;
+  }
 }
 
 .life-start-actions{margin-top:12px}.life-start-actions #lcStartButton{width:100%}
