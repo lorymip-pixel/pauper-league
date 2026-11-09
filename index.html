@@ -149,34 +149,11 @@ table{font-size:12px}th,td{padding:9px 7px}
 .life-players{display:none}.life-players.started{display:grid}
 .life-setup-status{margin-top:12px}
 .life-title-row{justify-content:flex-start;gap:10px;position:relative}
-.life-info{position:relative;flex-shrink:0}
-.life-info summary{list-style:none;cursor:pointer;display:grid;place-items:center;width:22px;height:22px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);font-size:13px;font-weight:800;line-height:1;user-select:none}
-.life-info summary::-webkit-details-marker{display:none}
-.life-info summary:hover,.life-info[open] summary{border-color:var(--accent);color:var(--accent)}
-.life-info-content{position:absolute;top:calc(100% + 9px);left:0;z-index:20;width:min(330px,calc(100vw - 76px));box-sizing:border-box;padding:12px 14px;background:#202b45;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 30px #0008;color:var(--text);font-size:13px;font-weight:400;line-height:1.5}
-@media(hover:hover){.life-info:not([open]):hover .life-info-content{display:block}.life-info:not([open]) .life-info-content{display:none}}
-/* Safari iOS: tooltip in viewport, mai ancorato all'icona a destra. */
-@media(max-width:900px), (hover:none) and (pointer:coarse){
-  #lcInfoTooltip .life-info-content{
-    position:fixed !important;
-    top:50% !important;
-    left:16px !important;
-    right:16px !important;
-    bottom:auto !important;
-    transform:translateY(-50%);
-    width:auto !important;
-    max-width:none !important;
-    max-height:calc(100dvh - 48px);
-    overflow-y:auto;
-    overflow-wrap:anywhere;
-    z-index:2001;
-    box-sizing:border-box;
-    font-size:15px;
-    padding:20px;
-    box-shadow:0 18px 70px #000c;
-  }
-}
-
+/* Informazioni inline: nessun popup, nessun posizionamento fuori viewport. */
+.life-info-button{flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font-size:15px;font-weight:800;padding:0;display:grid;place-items:center;cursor:pointer;line-height:1}
+.life-info-button:hover,.life-info-button[aria-expanded="true"]{background:var(--accent);color:#101625}
+.life-info-inline{position:static;display:block;width:100%;max-width:100%;box-sizing:border-box;margin:10px 0 4px;padding:12px 14px;background:#202b45;border:1px solid var(--line);border-radius:12px;color:var(--text);font-size:14px;line-height:1.5;overflow-wrap:anywhere;white-space:normal}
+.life-info-inline[hidden]{display:none !important}
 .life-start-actions{margin-top:12px}.life-start-actions #lcStartButton{width:100%}
 
 .life-confirm{position:fixed;inset:0;z-index:1200;background:#050914eF;display:none;align-items:center;justify-content:center;padding:20px}
@@ -461,11 +438,9 @@ body.arena-open{overflow:hidden}
     <div class="card span12">
       <div id="lcSetupHeader" class="section-head life-title-row">
         <h2>Partita al meglio delle 3</h2>
-        <details class="life-info" id="lcInfoTooltip">
-          <summary aria-label="Informazioni sulla modalità partita" title="Informazioni sulla modalità partita">i</summary>
-          <div id="lcSetupHelp" class="life-info-content">Seleziona i due sfidanti. Se un giocatore non è presente nella lista, scegli ＋ Aggiungi in fondo alla tendina. Data, giornata e presenze vengono registrate automaticamente al salvataggio del match.</div>
-        </details>
+        <button type="button" id="lcInfoToggle" class="life-info-button" aria-label="Mostra informazioni sulla modalità partita" aria-controls="lcSetupHelp" aria-expanded="false" onclick="toggleLifeInfo()">i</button>
       </div>
+      <div id="lcSetupHelp" class="life-info-inline" hidden>Seleziona i due sfidanti. Se un giocatore non è presente nella lista, scegli ＋ Aggiungi in fondo alla tendina. Data, giornata e presenze vengono registrate automaticamente al salvataggio del match.</div>
       <div id="lcModeSelector" class="field" style="margin:12px 0 16px">
         <label>Modalità partita</label>
         <div class="life-mode-choice" role="group" aria-label="Modalità partita">
@@ -2054,6 +2029,14 @@ async function savePlayerFromLifeModal(){
   toast(p ? 'Giocatore selezionato' : 'Giocatore aggiunto');
 }
 
+function toggleLifeInfo(){
+  const help = document.getElementById('lcSetupHelp');
+  const button = document.getElementById('lcInfoToggle');
+  const opening = help.hidden;
+  help.hidden = !opening;
+  button.setAttribute('aria-expanded', String(opening));
+  button.setAttribute('aria-label', opening ? 'Nascondi informazioni sulla modalità partita' : 'Mostra informazioni sulla modalità partita');
+}
 function selectLifeMode(mode){
   if (mode !== 'BO1' && mode !== 'BO3') return;
   if (lifeMatch && lifeMatch.finished && lifeMatch.mode !== 'BO1') return toast('Salva prima il risultato BO3');
